@@ -1,8 +1,9 @@
-let token = '';
+let rateId = '';
 let fullResult = null;
 
 const PAYMENT_LINK = 'https://wealthyquest67.gumroad.com/l/xesgo';
 
+// ── ANALYZE
 document.getElementById('analyze-btn').addEventListener('click', analyze);
 
 async function analyze() {
@@ -27,7 +28,7 @@ async function analyze() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Analysis failed.');
 
-    token = data.token;
+    rateId = data.rateId;
     showPreview(data.preview);
 
   } catch (e) {
@@ -38,10 +39,12 @@ async function analyze() {
   }
 }
 
+// ── PAY
 document.getElementById('pay-btn').addEventListener('click', () => {
   window.open(PAYMENT_LINK, '_blank');
 });
 
+// ── UNLOCK
 document.getElementById('unlock-btn').addEventListener('click', unlock);
 document.getElementById('order-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') unlock();
@@ -60,7 +63,7 @@ async function unlock() {
     const resp = await fetch('/api/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId, token }),
+      body: JSON.stringify({ orderId, rateId }),
     });
 
     const data = await resp.json();
@@ -76,8 +79,9 @@ async function unlock() {
   }
 }
 
+// ── RESET
 document.getElementById('new-btn').addEventListener('click', () => {
-  token = ''; fullResult = null;
+  rateId = ''; fullResult = null;
   document.getElementById('inp-content').value = '';
   document.getElementById('inp-subject').value = '';
   document.getElementById('preview-section').style.display = 'none';
@@ -86,30 +90,44 @@ document.getElementById('new-btn').addEventListener('click', () => {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
+// ── SHOW PREVIEW (teaser: score + flag count + paywall)
 function showPreview(preview) {
   const score = preview.score;
-  document.getElementById('preview-score').textContent = score + '/10';
-  document.getElementById('preview-score').style.color = scoreColor(score);
-  document.getElementById('preview-verdict').textContent = preview.verdict;
-  document.getElementById('preview-verdict').style.color = scoreColor(score);
-  document.getElementById('preview-flag-count').textContent = preview.flagCount + ' red flag' + (preview.flagCount !== 1 ? 's' : '') + ' detected';
+  const scoreEl = document.getElementById('preview-score');
+  const verdictEl = document.getElementById('preview-verdict');
+  const flagCountEl = document.getElementById('preview-flag-count');
+
+  scoreEl.textContent = score + '/10';
+  scoreEl.style.color = scoreColor(score);
+  verdictEl.textContent = preview.verdict;
+  verdictEl.style.color = scoreColor(score);
+  flagCountEl.textContent = preview.flagCount + ' red flag' + (preview.flagCount !== 1 ? 's' : '') + ' detected';
+
+  // Score bar
   const bar = document.getElementById('score-bar-fill');
   bar.style.width = (score * 10) + '%';
   bar.style.background = scoreColor(score);
+
   document.getElementById('preview-section').style.display = 'block';
   document.getElementById('preview-section').scrollIntoView({ behavior: 'smooth' });
 }
 
+// ── SHOW FULL RESULT
 function showUnlocked(r) {
-  document.getElementById('full-score').textContent = r.score + '/10';
-  document.getElementById('full-score').style.color = scoreColor(r.score);
+  // Score card
+  const scoreEl = document.getElementById('full-score');
+  scoreEl.textContent = r.score + '/10';
+  scoreEl.style.color = scoreColor(r.score);
+
   document.getElementById('full-verdict').textContent = r.verdict;
   document.getElementById('full-verdict').style.color = scoreColor(r.score);
   document.getElementById('full-summary').textContent = r.summary;
+
   const bar2 = document.getElementById('full-score-bar');
   bar2.style.width = (r.score * 10) + '%';
   bar2.style.background = scoreColor(r.score);
 
+  // Red flags
   const flagsEl = document.getElementById('flags-list');
   flagsEl.innerHTML = '';
   (r.flags || []).forEach(f => {
@@ -120,6 +138,7 @@ function showUnlocked(r) {
     flagsEl.appendChild(div);
   });
 
+  // Green flags
   const greenEl = document.getElementById('green-flags-list');
   greenEl.innerHTML = '';
   if (r.green_flags && r.green_flags.length > 0) {
@@ -134,6 +153,7 @@ function showUnlocked(r) {
   }
 
   document.getElementById('verdict-detail').textContent = r.verdict_detail;
+
   document.getElementById('preview-section').style.display = 'none';
   document.getElementById('unlocked-section').style.display = 'block';
   document.getElementById('unlocked-section').scrollIntoView({ behavior: 'smooth' });
