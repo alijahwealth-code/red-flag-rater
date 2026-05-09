@@ -1,36 +1,48 @@
-import crypto from 'crypto';
+import { Redis } from '@upstash/redis';
+import { randomUUID } from 'crypto';
+
+const redis = new Redis({
+  url:   process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
+});
+
+const systemPrompt = `You are a brutally honest relationship analyst who rates red flags. You analyze texts, dating profiles, or behavior descriptions and give a red flag score. Be specific, sharp, and entertaining — but accurate. Don't sugarcoat.
+
+Respond in valid JSON only, no markdown:
+{
+  "score": <number 1-10, where 1=totally fine, 10=run immediately>,
+  "verdict": "<2-4 word dramatic verdict e.g. 'MAJOR RED FLAGS', 'PROCEED WITH CAUTION', 'WALK AWAY NOW', 'SURPRISINGLY CLEAN'>",
+  "summary": "<2 sentences: what this person/situation is giving>",
+  "flags": [
+    { "flag": "<red flag name>", "severity": "low" | "medium" | "high", "detail": "<one sentence explanation>" }
+  ],
+  "green_flags": ["<any positive signs, or empty array if none>"],
+  "verdict_detail": "<2-3 sentences of honest overall assessment and recommendation>"
+}`;
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { content, subject } = req.body || {};
   if (!content || !content.trim()) return res.status(400).json({ error: 'Nothing to analyze.' });
 
   const apiKey = process.env.OPENROUTER_API_KEY;
-  const secret = process.env.ENCRYPTION_SECRET;
-  if (!apiKey || !secret || secret.length !== 64) {
-    return res.status(500).json({ error: 'Server misconfiguration.' });
-  }
-
-  const systemPrompt = 'You are a brutally honest relationship analyst who rates red flags. You analyze texts, dating profiles, or behavior descriptions and give a red flag score. Be specific, sharp, and entertaining — but accurate. Respond in valid JSON only, no markdown: {"score": <number 1-10>, "verdict": "<2-4 word dramatic verdict>", "summary": "<2 sentences>", "flags": [{"flag": "<name>", "severity": "low"|"medium"|"high", "detail": "<one sentence>"}], "green_flags": ["<any positives or empty array>"], "verdict_detail": "<2-3 sentences overall assessment>"}';
+  if (!apiKey) return res.status(500).json({ error: 'Server misconfiguration.' });
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer ' + apiKey,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'https://red-flag-rater.vercel.app',
+        'X-Title': 'Red Flag Rater',
       },
       body: JSON.stringify({
         model: 'anthropic/claude-haiku-4-5',
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: 'Analyze this' + (subject ? ' (about: ' + subject + ')' : '') + ':\n\n' + content.slice(0, 3000) }
+          { role: 'user', content: 'Analyze this' + (subject ? ` (about: ${subject})` : '') + ':\n\n' + content.slice(0, 3000) },
         ],
         max_tokens: 800,
         temperature: 0.75,
@@ -44,22 +56,20 @@ export default async function handler(req, res) {
     const cleaned = raw.replace(/```json|```/g, '').trim();
     const result = JSON.parse(cleaned);
 
-    const key = Buffer.from(secret, 'hex');
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let encrypted = cipher.update(JSON.stringify(result), 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const tag = cipher.getAuthTag();
-    const token = iv.toString('hex') + '.' + encrypted + '.' + tag.toString('hex');
+    // Store full result in Redis — expires in 2 hours
+    const rateId = randomUUID();
+    await redis.set(`rate:${rateId}`, JSON.stringify(result), { ex: 7200 });
 
+    // Send only a teaser preview to the browser
     const preview = {
       score: result.score,
       verdict: result.verdict,
       flagCount: (result.flags || []).length,
     };
 
-    return res.status(200).json({ preview, token });
+    return res.status(200).json({ preview, rateId });
   } catch (e) {
+    console.error('Rate error:', e);
     return res.status(500).json({ error: e.message || 'Analysis failed. Try again.' });
   }
 }
