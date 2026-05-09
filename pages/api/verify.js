@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import { Redis } from '@upstash/redis';
 
 const redis = new Redis({
@@ -7,38 +6,28 @@ const redis = new Redis({
 });
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { orderId, token } = req.body || {};
-  if (!orderId || !token) return res.status(400).json({ error: 'Missing order ID or token.' });
-
-  const secret = process.env.ENCRYPTION_SECRET;
-  if (!secret || secret.length !== 64) return res.status(500).json({ error: 'Server misconfiguration.' });
-
-  const exists = await redis.get('sale:' + orderId.trim());
-  if (!exists) return res.status(400).json({ error: 'Order ID not found. Check your Gumroad confirmation email.' });
-
-  await redis.del('sale:' + orderId.trim());
-
-  const parts = token.split('.');
-  if (parts.length !== 3) return res.status(400).json({ error: 'Invalid session. Please analyze again.' });
+  const { orderId, rateId } = req.body || {};
+  if (!orderId || !rateId) return res.status(400).json({ error: 'Missing order ID or session.' });
 
   try {
-    const [ivHex, encHex, tagHex] = parts;
-    const key = Buffer.from(secret, 'hex');
-    const iv = Buffer.from(ivHex, 'hex');
-    const tag = Buffer.from(tagHex, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(tag);
-    let decrypted = decipher.update(encHex, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    const result = JSON.parse(decrypted);
+    const saleValid = await redis.get(`sale:${orderId.trim()}`);
+    if (!saleValid) {
+      return res.status(403).json({ error: 'Order ID not found. Check your Gumroad confirmation email.' });
+    }
+
+    const stored = await redis.get(`rate:${rateId}`);
+    if (!stored) {
+      return res.status(404).json({ error: 'Session expired. Please analyze again.' });
+    }
+
+    await redis.del(`rate:${rateId}`);
+
+    const result = JSON.parse(stored);
     return res.status(200).json({ result });
   } catch (e) {
-    return res.status(500).json({ error: 'Could not decrypt result. Try analyzing again.' });
+    console.error('Verify error:', e);
+    return res.status(500).json({ error: 'Server error. Try again.' });
   }
 }
